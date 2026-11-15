@@ -18,7 +18,7 @@ analyseBtn.addEventListener("click", async function () {
 
     try {
 
-        const response = await fetch("http://localhost:3000/api/analyze", {
+        const response = await fetch("https://verifyai-backend-c4kr.onrender.com/api/analyze", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
