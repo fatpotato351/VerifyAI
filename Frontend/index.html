@@ -215,8 +215,71 @@
             </div>
         </div>
     </div>
+
 </section>
+
+<!-- Logo Comparison Section -->
+<section class="logo-checker-section" id="logo-checker">
+
+    <div class="checker-heading">
+        <p class="eyebrow">VISUAL BRAND VERIFICATION</p>
+        <h2>Is your logo truly on-brand?</h2>
+        <p>Compare your submitted logo against your official brand identity.</p>
+    </div>
+
+    <div class="logo-checker-container">
+
+        <div class="logo-upload-card">
+            <h3>01. Reference Logo</h3>
+            <p>Upload your official brand logo.</p>
+            <input
+                type="file"
+                id="referenceLogo"
+                accept="image/png, image/jpeg, image/webp"
+            />
+            <p class="upload-note">
+    Supported formats: PNG, JPG, JPEG, WEBP<br>
+    Maximum file size: 5 MB
+</p>
+            <div id="referencePreview" class="logo-preview">
+                Your reference logo will appear here.
+            </div>
+        </div>
+
+        <div class="logo-upload-card">
+            <h3>02. Submitted Logo</h3>
+            <p>Upload the logo you want to verify.</p>
+            <input
+                type="file"
+                id="submittedLogo"
+                accept="image/png, image/jpeg, image/webp"
+            />
+            <p class="upload-note">
+    Supported formats: PNG, JPG, JPEG, WEBP<br>
+    Maximum file size: 5 MB
+</p>
+            <div id="submittedPreview" class="logo-preview">
+                Your submitted logo will appear here.
+            </div>
+        </div>
+
+    </div>
+
+    <button id="compareLogosBtn" type="button">
+        Compare Logos →
+    </button>
+
+    <div class="logo-results-card">
+        <h3>Comparison Results</h3>
+        <div id="logoResults">
+            <p>Your logo comparison will appear here.</p>
+        </div>
+    </div>
+
+</section>
+
 <!-- Footer -->
+
     <footer>
         <div class="logo">Verify<span>AI</span></div>
         <p>Create freely. Publish confidently.</p>

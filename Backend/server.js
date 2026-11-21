@@ -2,14 +2,37 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-
+import { GoogleGenAI, Type } from "@google/genai";
+import multer from "multer";
 dotenv.config();
-
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY
+});
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+// Logo image upload configuration
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+        files: 2
+    },
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+        ];
 
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error("Only PNG, JPG, and WEBP images are allowed."));
+        }
+    }
+});
 // Health check
 app.get("/api/health", (req, res) => {
     res.json({
@@ -365,9 +388,180 @@ for (const claim of mergedClaims) {
             : "Potential compliance issues were detected. Human review is recommended."
     };
 }
+// Gemini AI analysis engine
+async function analyseWithGemini(guidelines, content) {
+
+    const response = await ai.models.generateContent({
+
+        model: "gemini-3.1-flash-lite",
+
+        contents: `
+
+You are VerifyAI, a strict brand compliance analyzer.
+
+Your PRIMARY responsibility is to evaluate submitted content against the exact brand guidelines supplied by the user.
+
+BRAND GUIDELINES:
+${guidelines}
+
+SUBMITTED CONTENT:
+${content}
+
+ANALYSIS PRIORITIES:
+
+1. EXPLICIT BRAND RULES — HIGHEST PRIORITY
+- Treat explicit brand instructions as mandatory requirements.
+- Flag content that directly violates a stated restriction, requirement, prohibited phrase, formatting rule or communication instruction.
+- Never ignore an explicit rule because the content might seem acceptable in another context.
+- If a guideline explicitly prohibits something, its prohibition takes priority.
+
+2. BRAND TONE AND PERSONALITY
+- Evaluate whether the content matches the tone, personality, audience and positioning described in the guidelines.
+- Consider the meaning and context of the complete sentence rather than judging isolated words.
+- Do not flag wording merely because it is informal, promotional or unusual unless it conflicts with the supplied guidelines.
+
+3. CLAIMS AND ACCURACY
+- Flag potentially exaggerated, misleading or unsupported claims when relevant.
+- Do not automatically declare a claim false without evidence.
+- Distinguish between a claim requiring verification and a confirmed guideline violation.
+
+4. STRICT EVIDENCE FROM GUIDELINES
+- Do not invent brand rules or restrictions.
+- Do not assume a brand prefers a particular tone unless its guidelines support that interpretation.
+- Whenever possible, explain which specific guideline supports the finding.
+- If an issue is not directly covered by the guidelines, clearly distinguish it as a general recommendation rather than an explicit violation.
+
+5. ISSUE QUALITY
+- Report genuine and relevant issues only.
+- Avoid reporting the same underlying violation multiple times.
+- Give a clear explanation and an actionable recommendation.
+- Use these severity levels:
+  - critical
+  - warning
+  - suggestion
+
+Return an empty issues array if no issues are found.
+
+`,
+
+        config: {
+
+            responseMimeType: "application/json",
+
+            responseSchema: {
+                type: Type.OBJECT,
+
+                properties: {
+                    issues: {
+                        type: Type.ARRAY,
+
+                        items: {
+                            type: Type.OBJECT,
+
+                            properties: {
+                                severity: {
+                                    type: Type.STRING,
+                                    enum: ["critical", "warning", "suggestion"]
+                                },
+
+                                title: {
+                                    type: Type.STRING
+                                },
+
+                                explanation: {
+                                    type: Type.STRING
+                                },
+
+                                suggestion: {
+                                    type: Type.STRING
+                                },
+
+                                matchedPhrase: {
+                                    type: Type.STRING
+                                }
+                            },
+
+                            required: [
+                                "severity",
+                                "title",
+                                "explanation",
+                                "suggestion",
+                                "matchedPhrase"
+                            ]
+                        }
+                    }
+                },
+
+                required: ["issues"]
+            }
+        }
+    });
+
+    const result = JSON.parse(response.text);
+
+    return result.issues;
+}
+
+// Generate complete AI-powered content corrections
+async function generateAiCorrection(guidelines, content, issues) {
+
+    try {
+        const response = await ai.models.generateContent({
+
+            model: "gemini-3.1-flash-lite",
+
+            contents: `
+You are VerifyAI, an expert brand-compliance editor.
+
+Rewrite the ENTIRE submitted content using the supplied brand guidelines and detected issues.
+
+BRAND GUIDELINES:
+${guidelines}
+
+ORIGINAL CONTENT:
+${content}
+
+DETECTED ISSUES:
+${JSON.stringify(issues, null, 2)}
+
+INSTRUCTIONS:
+1. Return the complete corrected content, not just individual suggestions.
+2. Fix all genuine issues identified in the findings.
+3. Preserve the original meaning, important information and intended message.
+4. Match the brand's tone, personality and communication style.
+5. Do not introduce new claims, facts, statistics or promises.
+6. Do not invent evidence to support questionable claims. Use cautious, appropriately qualified wording where necessary.
+7. Avoid unnecessary rewriting of sentences that are already compliant.
+8. Never use placeholders such as [insert text] or [replace wording].
+9. If no issues need correction, return the original content unchanged.
+
+Return ONLY the complete revised content.
+Do not include explanations, headings or commentary.
+`,
+
+            config: {
+                responseMimeType: "text/plain"
+            }
+        });
+
+        const correctedContent = response.text?.trim();
+
+        if (!correctedContent) {
+            throw new Error("AI returned an empty correction.");
+        }
+
+        return correctedContent;
+
+    } catch (error) {
+        console.error("AI correction error:", error);
+
+        // Keep the original content available if AI correction fails
+        return content;
+    }
+}
 
 // Analysis endpoint
-app.post("/api/analyze", (req, res) => {
+app.post("/api/analyze", async (req, res) => {
 
     const { guidelines, content } = req.body;
 
@@ -383,17 +577,269 @@ app.post("/api/analyze", (req, res) => {
         });
     }
 
-    const result = analyseContent(
-        guidelines.trim(),
-        content.trim()
-    );
+    try {
 
-    res.json({
-        status: "success",
-        analysis: result
+        // Run existing rule-based analysis
+        const result = analyseContent(
+            guidelines.trim(),
+            content.trim()
+        );
+
+        // Run Gemini AI analysis
+        const aiIssues = await analyseWithGemini(
+            guidelines.trim(),
+            content.trim()
+        );
+
+        
+// Combine both sets of findings and remove duplicates
+const combinedIssues = [...result.issues];
+
+function getIssueCategory(title) {
+    const normalized = title.toLowerCase();
+
+    if (
+        normalized.includes("forbidden") ||
+        normalized.includes("prohibited") ||
+        normalized.includes("guideline contradiction")
+    ) return "brand-restriction";
+
+    if (
+        normalized.includes("exaggerated") ||
+        normalized.includes("claim")
+    ) return "exaggerated-claim";
+
+    if (normalized.includes("punctuation")) {
+        return "punctuation";
+    }
+
+    if (normalized.includes("tone")) {
+        return "tone";
+    }
+
+    return normalized;
+}
+
+const severityRank = {
+    critical: 3,
+    warning: 2,
+    suggestion: 1
+};
+
+for (const aiIssue of aiIssues) {
+
+    const aiCategory = getIssueCategory(aiIssue.title);
+    const aiPhrase = (aiIssue.matchedPhrase || "")
+        .trim()
+        .toLowerCase();
+
+    const duplicate = combinedIssues.find(issue => {
+
+        const sameCategory =
+            getIssueCategory(issue.title) === aiCategory;
+
+        const existingPhrase = (issue.matchedPhrase || "")
+            .trim()
+            .toLowerCase();
+
+        if (aiPhrase && existingPhrase) {
+            return sameCategory && aiPhrase === existingPhrase;
+        }
+
+        return (
+            sameCategory &&
+            issue.title.toLowerCase() === aiIssue.title.toLowerCase()
+        );
     });
+
+    if (duplicate) {
+
+        // Keep the more serious severity
+        if (
+            (severityRank[aiIssue.severity] || 0) >
+            (severityRank[duplicate.severity] || 0)
+        ) {
+            duplicate.severity = aiIssue.severity;
+        }
+
+    } else {
+        combinedIssues.push(aiIssue);
+    }
+}
+
+
+        // Recalculate compliance score
+        const deductions = {
+            critical: 30,
+            warning: 15,
+            suggestion: 5
+        };
+
+        let score = 100;
+
+        for (const issue of combinedIssues) {
+            score -= deductions[issue.severity] || 0;
+        }
+
+        score = Math.max(0, score);
+
+        const status =
+            combinedIssues.some(i => i.severity === "critical")
+                ? "High Risk"
+                : combinedIssues.some(i => i.severity === "warning")
+                ? "Needs Review"
+                : "Good";
+
+        // Update existing analysis result
+        result.score = score;
+        result.status = status;
+        result.issues = combinedIssues;
+        result.totalIssues = combinedIssues.length;
+        // Generate complete AI-powered corrections
+        result.correctedContent = combinedIssues.length > 0
+         ? await generateAiCorrection(
+             guidelines.trim(),
+             content.trim(),
+             combinedIssues
+         )
+         : content.trim();
+        result.message = combinedIssues.length === 0
+            ? "No issues were detected by the current analysis."
+            : "Potential compliance issues were detected. Human review is recommended.";
+
+        res.json({
+            status: "success",
+            analysis: result
+        });
+
+    } catch (error) {
+
+        console.error("VerifyAI analysis error:", error);
+
+        res.status(500).json({
+            status: "error",
+            message: "AI analysis is temporarily unavailable. Please try again."
+        });
+    }
 });
 
+// AI-powered brand logo comparison
+app.post(
+    "/api/compare-logos",
+    upload.fields([
+        { name: "referenceLogo", maxCount: 1 },
+        { name: "submittedLogo", maxCount: 1 }
+    ]),
+    async (req, res) => {
+
+        try {
+            const referenceLogo = req.files?.referenceLogo?.[0];
+            const submittedLogo = req.files?.submittedLogo?.[0];
+
+            if (!referenceLogo || !submittedLogo) {
+                return res.status(400).json({
+                    status: "error",
+                    message: "Please upload both reference and submitted logos."
+                });
+            }
+
+            const response = await ai.models.generateContent({
+                model: "gemini-3.1-flash-lite",
+
+                contents: [
+                    {
+                        text: `
+You are VerifyAI, a professional brand identity comparison assistant.
+
+Compare the two uploaded logos.
+
+IMAGE 1: Official reference brand logo.
+IMAGE 2: Logo submitted for verification.
+
+Evaluate:
+1. Colour consistency.
+2. Typography and font style.
+3. Symbols and visual elements.
+4. Layout and proportions.
+5. Overall visual consistency with the reference.
+
+Return an honest assessment. Do not assume differences are violations.
+Do not claim that the logos are identical or legally authentic.
+
+Provide:
+- A similarity score from 0 to 100.
+- An overall verdict.
+- A list of specific visual differences.
+- Recommendations for improvement.
+
+Return only valid JSON.
+`
+                    },
+                    {
+                        inlineData: {
+                            mimeType: referenceLogo.mimetype,
+                            data: referenceLogo.buffer.toString("base64")
+                        }
+                    },
+                    {
+                        inlineData: {
+                            mimeType: submittedLogo.mimetype,
+                            data: submittedLogo.buffer.toString("base64")
+                        }
+                    }
+                ],
+
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            similarityScore: {
+                                type: Type.INTEGER
+                            },
+                            verdict: {
+                                type: Type.STRING
+                            },
+                            differences: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.STRING
+                                }
+                            },
+                            recommendations: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.STRING
+                                }
+                            }
+                        },
+                        required: [
+                            "similarityScore",
+                            "verdict",
+                            "differences",
+                            "recommendations"
+                        ]
+                    }
+                }
+            });
+
+            const comparison = JSON.parse(response.text);
+
+            res.json({
+                status: "success",
+                comparison
+            });
+
+        } catch (error) {
+            console.error("Logo comparison error:", error);
+
+            res.status(500).json({
+                status: "error",
+                message: "Logo comparison is temporarily unavailable. Please try again."
+            });
+        }
+    }
+);
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
